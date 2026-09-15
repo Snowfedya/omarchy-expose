@@ -10,6 +10,7 @@ import qs.Ui as Ui // qmllint disable import
 import "IconResolver.js" as IconResolver
 import "WindowModel.js" as WindowModel
 import "ScreenLayout.js" as ScreenLayout
+import "AppSearch.js" as AppSearch
 
 Item {
     id: root
@@ -179,6 +180,8 @@ Item {
     property bool surfaceMounted: false
     property bool hotCornerArmed: true
     property string filterText: ""
+    readonly property var appResults: AppSearch.search(root.filterText, DesktopEntries.applications ? DesktopEntries.applications.values : [], root.filteredToplevels.length > 0 ? 3 : 7)
+    property int selectedAppIndex: -1
     property string workspaceScope: "all"
     property int selectedIndex: 0
     property int hoveredIndex: -1
@@ -300,7 +303,8 @@ Item {
             root.backgroundBlurReleasePhase = 0;
         root.closeSettings();
         root.filterText = "";
-        root.workspaceScope = root.initialWorkspaceScope;
+        root.selectedAppIndex = -1;
+        root.workspaceScope = "all";
         root.dismissNotifyShell = false;
         if (root.surfaceMounted) {
             if (blurRestoreInFlight) {
@@ -858,6 +862,7 @@ Item {
         root.filterText = value;
         root.selectedIndex = 0;
         root.hoveredIndex = -1;
+        root.selectedAppIndex = root.filteredToplevels.length === 0 ? 0 : -1;
         root.clearPreview();
         root.modelRevision++;
     }
@@ -1409,29 +1414,73 @@ Item {
             return;
         }
         if (event.key === Qt.Key_Escape) {
-            if (root.previewIndex >= 0 || root.previewExitIndex >= 0)
+            if (root.filterText.length > 0)
+                root.setFilter("");
+            else if (root.previewIndex >= 0 || root.previewExitIndex >= 0)
                 root.clearPreview();
             else
                 root.dismiss();
         } else if (event.key === Qt.Key_Space || event.text === " ") {
-            if (!event.isAutoRepeat)
+            if (root.filterText.length > 0)
+                root.setFilter(root.filterText + " ");
+            else if (!event.isAutoRepeat)
                 root.togglePreview(Boolean(event.modifiers & Qt.ShiftModifier));
         }
         else if (event.key === Qt.Key_Tab
                 && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
-            if (!event.isAutoRepeat)
+            if (root.filterText.length > 0 && root.appResults.length > 0) {
+                if (root.selectedAppIndex >= 0)
+                    root.selectedAppIndex = (root.selectedAppIndex + 1) % root.appResults.length;
+                else
+                    root.selectedAppIndex = 0;
+            } else if (!event.isAutoRepeat) {
                 root.toggleWorkspaceScope();
+            }
         }
-        else if (event.key === Qt.Key_Left)
-            root.moveDirectional(-1, 0, layout, Boolean(event.modifiers & Qt.ShiftModifier));
-        else if (event.key === Qt.Key_Right)
-            root.moveDirectional(1, 0, layout, Boolean(event.modifiers & Qt.ShiftModifier));
-        else if (event.key === Qt.Key_Up)
-            root.moveDirectional(0, -1, layout, Boolean(event.modifiers & Qt.ShiftModifier));
-        else if (event.key === Qt.Key_Down)
-            root.moveDirectional(0, 1, layout, Boolean(event.modifiers & Qt.ShiftModifier));
-        else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
-            root.activate(root.filteredToplevels[root.selectedIndex]);
+        else if (event.key === Qt.Key_Left) {
+            if (root.selectedAppIndex >= 0)
+                root.selectedAppIndex = Math.max(0, root.selectedAppIndex - 1);
+            else
+                root.moveDirectional(-1, 0, layout, Boolean(event.modifiers & Qt.ShiftModifier));
+        }
+        else if (event.key === Qt.Key_Right) {
+            if (root.selectedAppIndex >= 0)
+                root.selectedAppIndex = Math.min(root.appResults.length - 1, root.selectedAppIndex + 1);
+            else
+                root.moveDirectional(1, 0, layout, Boolean(event.modifiers & Qt.ShiftModifier));
+        }
+        else if (event.key === Qt.Key_Up) {
+            if (root.selectedAppIndex >= 0) {
+                if (root.selectedAppIndex === 0 && root.filteredToplevels.length > 0)
+                    root.selectedAppIndex = -1;
+                else
+                    root.selectedAppIndex = Math.max(0, root.selectedAppIndex - 1);
+            } else {
+                root.moveDirectional(0, -1, layout, Boolean(event.modifiers & Qt.ShiftModifier));
+            }
+        }
+        else if (event.key === Qt.Key_Down) {
+            if (root.selectedAppIndex >= 0) {
+                root.selectedAppIndex = Math.min(root.appResults.length - 1, root.selectedAppIndex + 1);
+            } else if (root.filteredToplevels.length === 0 && root.appResults.length > 0) {
+                root.selectedAppIndex = 0;
+            } else if (root.appResults.length > 0) {
+                root.selectedAppIndex = 0;
+            } else {
+                root.moveDirectional(0, 1, layout, Boolean(event.modifiers & Qt.ShiftModifier));
+            }
+        }
+        else if (event.key === Qt.Key_Return || event.key === Qt.Key_Enter) {
+            if (root.selectedAppIndex >= 0 && root.selectedAppIndex < root.appResults.length) {
+                AppSearch.launch(root.appResults[root.selectedAppIndex], Quickshell);
+                root.dismiss();
+            } else if (root.filteredToplevels.length === 0 && root.appResults.length > 0) {
+                AppSearch.launch(root.appResults[0], Quickshell);
+                root.dismiss();
+            } else if (root.filteredToplevels.length > 0) {
+                root.activate(root.filteredToplevels[root.selectedIndex]);
+            }
+        }
         else if (event.key === Qt.Key_Q
                 && Boolean(event.modifiers & Qt.ShiftModifier)
                 && !(event.modifiers & (Qt.ControlModifier | Qt.AltModifier | Qt.MetaModifier))) {
@@ -2108,6 +2157,96 @@ Item {
                                     color: Commons.Color.menu.text
                                     font.family: Style.font.menuFamily
                                     font.pixelSize: Style.font.caption
+                                }
+                            }
+                        }
+                    }
+
+                    Rectangle {
+                        id: appResultsBar
+                        visible: root.filterText.length > 0 && root.appResults.length > 0
+                        Layout.alignment: Qt.AlignHCenter
+                        Layout.preferredWidth: searchBar.width
+                        Layout.preferredHeight: Math.min(Style.space(320), appResultsCol.implicitHeight + Style.spacing.xs * 2)
+                        radius: Style.cornerRadius
+                        color: Color.menu.background
+                        border.color: Color.menu.border
+                        border.width: Math.max(1, Style.normalBorderWidth)
+                        clip: true
+
+                        ColumnLayout {
+                            id: appResultsCol
+                            anchors.fill: parent
+                            anchors.margins: Style.spacing.xs
+                            spacing: Style.spacing.xs
+
+                            Repeater {
+                                model: root.appResults
+
+                                delegate: Rectangle {
+                                    required property var modelData
+                                    required property int index
+
+                                    Layout.fillWidth: true
+                                    Layout.preferredHeight: Style.space(38)
+                                    radius: Math.max(2, Style.cornerRadius - Style.spacing.sm)
+                                    color: root.selectedAppIndex === index
+                                        ? (Color.accentWithAlpha ? Color.accentWithAlpha(0.25) : Qt.rgba(1, 1, 1, 0.12))
+                                        : (appMouseArea.containsMouse ? Qt.rgba(1, 1, 1, 0.05) : "transparent")
+                                    border.color: root.selectedAppIndex === index ? Color.accent : "transparent"
+                                    border.width: 1
+
+                                    RowLayout {
+                                        anchors.fill: parent
+                                        anchors.leftMargin: Style.spacing.md
+                                        anchors.rightMargin: Style.spacing.md
+                                        spacing: Style.spacing.md
+
+                                        Image {
+                                            Layout.preferredWidth: Style.space(22)
+                                            Layout.preferredHeight: Style.space(22)
+                                            source: Quickshell.iconPath(modelData.icon, true) || ""
+                                            sourceSize: Qt.size(Style.space(22), Style.space(22))
+                                        }
+
+                                        Text {
+                                            text: modelData.title
+                                            color: root.selectedAppIndex === index ? Color.accent : Color.menu.text
+                                            font.family: Style.font.menuFamily
+                                            font.pixelSize: Style.font.body
+                                            font.bold: root.selectedAppIndex === index
+                                        }
+
+                                        Text {
+                                            Layout.fillWidth: true
+                                            text: modelData.subtext || ""
+                                            color: Color.menu.text
+                                            opacity: 0.55
+                                            font.family: Style.font.menuFamily
+                                            font.pixelSize: Style.font.bodySmall
+                                            elide: Text.ElideRight
+                                        }
+
+                                        Text {
+                                            visible: root.selectedAppIndex === index
+                                            text: "↵"
+                                            color: Color.accent
+                                            font.family: Style.font.menuFamily
+                                            font.pixelSize: Style.font.body
+                                            font.bold: true
+                                        }
+                                    }
+
+                                    MouseArea {
+                                        id: appMouseArea
+                                        anchors.fill: parent
+                                        hoverEnabled: true
+                                        onEntered: root.selectedAppIndex = index
+                                        onClicked: {
+                                            AppSearch.launch(modelData, Quickshell);
+                                            root.dismiss();
+                                        }
+                                    }
                                 }
                             }
                         }

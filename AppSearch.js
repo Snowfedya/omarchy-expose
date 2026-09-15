@@ -1,17 +1,12 @@
 .pragma library
 
-function normalize(str) {
-    return String(str || "").trim().toLowerCase();
-}
-
-function normalizeId(id) {
-    var str = normalize(id);
-    return str.slice(-8) === ".desktop" ? str.slice(0, -8) : str;
+function shellQuote(str) {
+    return "'" + String(str || "").replace(/'/g, "'\\''") + "'";
 }
 
 function search(query, desktopEntries, maxResults) {
     if (!query) return [];
-    var needle = normalize(query);
+    var needle = String(query || "").trim().toLowerCase();
     if (needle.length === 0) return [];
 
     var limit = maxResults || 6;
@@ -20,7 +15,7 @@ function search(query, desktopEntries, maxResults) {
 
     // 1. Terminal command runner mode with '>'
     if (needle.charAt(0) === ">") {
-        var cmd = query.slice(1).trim();
+        var cmd = String(query || "").trim().slice(1).trim();
         if (cmd.length > 0) {
             results.push({
                 type: "command",
@@ -69,10 +64,10 @@ function search(query, desktopEntries, maxResults) {
 
         var name = String(entry.name || "").trim();
         var genericName = String(entry.genericName || "").trim();
-        var id = normalizeId(entry.id);
+        var rawId = String(entry.id || "").trim();
         var comment = String(entry.comment || "").trim();
 
-        var haystack = [name, genericName, id, comment].join(" ").toLowerCase();
+        var haystack = [name, genericName, rawId, comment].join(" ").toLowerCase();
         var pos = haystack.indexOf(needle);
         if (pos === -1) continue;
 
@@ -83,11 +78,15 @@ function search(query, desktopEntries, maxResults) {
         var namePos = name.toLowerCase().indexOf(needle);
         var score = (namePos === 0) ? 0 : (namePos > 0 ? 1 : 2 + pos);
 
+        // In Quickshell, entry.id has the file extension stripped.
+        // Always append .desktop (so org.telegram.desktop becomes org.telegram.desktop.desktop).
+        var desktopFile = rawId + ".desktop";
+
         scored.push({
             type: "app",
             title: name,
             subtext: genericName || comment,
-            appId: id,
+            desktopFile: desktopFile,
             icon: entry.icon || "application-x-executable",
             score: score
         });
@@ -107,10 +106,12 @@ function search(query, desktopEntries, maxResults) {
 function launch(item, quickshell) {
     if (!item || !quickshell) return;
     if (item.type === "command") {
-        quickshell.execDetached(["xdg-terminal-exec", "--hold", "--", "bash", "-c", item.command]);
+        quickshell.execDetached(["bash", "-lc", "exec xdg-terminal-exec --hold -- bash -c " + shellQuote(item.command)]);
     } else if (item.type === "action") {
-        quickshell.execDetached(["omarchy-menu", "summon", item.route]);
+        quickshell.execDetached(["bash", "-lc", "exec omarchy-menu summon " + shellQuote(item.route)]);
     } else if (item.type === "app") {
-        quickshell.execDetached(["uwsm-app", "--", "gtk-launch", item.appId + ".desktop"]);
+        var file = item.desktopFile || (item.appId + ".desktop");
+        var cmd = "uwsm-app -- gtk-launch " + shellQuote(file) + " 2>/dev/null || gtk-launch " + shellQuote(file);
+        quickshell.execDetached(["bash", "-lc", cmd]);
     }
 }

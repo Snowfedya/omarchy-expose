@@ -182,6 +182,14 @@ Item {
     property string filterText: ""
     readonly property var appResults: AppSearch.search(root.filterText, DesktopEntries.applications ? DesktopEntries.applications.values : [], root.filteredToplevels.length > 0 ? 3 : 7)
     property int selectedAppIndex: -1
+    onAppResultsChanged: {
+        if (root.filterText.length > 0 && root.appResults.length > 0) {
+            if (root.selectedAppIndex < 0 || root.selectedAppIndex >= root.appResults.length)
+                root.selectedAppIndex = 0;
+        } else {
+            root.selectedAppIndex = -1;
+        }
+    }
     property string workspaceScope: "all"
     property int selectedIndex: 0
     property int hoveredIndex: -1
@@ -862,7 +870,6 @@ Item {
         root.filterText = value;
         root.selectedIndex = 0;
         root.hoveredIndex = -1;
-        root.selectedAppIndex = root.filteredToplevels.length === 0 ? 0 : -1;
         root.clearPreview();
         root.modelRevision++;
     }
@@ -1451,19 +1458,22 @@ Item {
         }
         else if (event.key === Qt.Key_Up) {
             if (root.selectedAppIndex >= 0) {
-                if (root.selectedAppIndex === 0 && root.filteredToplevels.length > 0)
+                if (root.selectedAppIndex > 0)
+                    root.selectedAppIndex--;
+                else if (root.filteredToplevels.length > 0)
                     root.selectedAppIndex = -1;
-                else
-                    root.selectedAppIndex = Math.max(0, root.selectedAppIndex - 1);
+            } else if (root.appResults.length > 0) {
+                root.selectedAppIndex = root.appResults.length - 1;
             } else {
                 root.moveDirectional(0, -1, layout, Boolean(event.modifiers & Qt.ShiftModifier));
             }
         }
         else if (event.key === Qt.Key_Down) {
             if (root.selectedAppIndex >= 0) {
-                root.selectedAppIndex = Math.min(root.appResults.length - 1, root.selectedAppIndex + 1);
-            } else if (root.filteredToplevels.length === 0 && root.appResults.length > 0) {
-                root.selectedAppIndex = 0;
+                if (root.selectedAppIndex < root.appResults.length - 1)
+                    root.selectedAppIndex++;
+                else if (root.filteredToplevels.length > 0)
+                    root.selectedAppIndex = -1;
             } else if (root.appResults.length > 0) {
                 root.selectedAppIndex = 0;
             } else {
